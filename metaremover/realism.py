@@ -245,33 +245,30 @@ def _squeeze(im: Image.Image, frac: float) -> Image.Image:
 
 
 def _bayer_demosaic(arr: np.ndarray) -> np.ndarray:
-    """RGGB mosaic then bilinear reconstruct. Real cameras never see native RGB."""
+    """Mild RGGB mosaic + reconstruct. Missing samples are filled by
+    normalized blur so zeros cannot pull the image dark/green."""
     h, w, _ = arr.shape
     if h < 4 or w < 4:
         return arr
-    mosaic = np.zeros((h, w), dtype=np.float32)
-    mosaic[0::2, 0::2] = arr[0::2, 0::2, 0]
-    mosaic[0::2, 1::2] = arr[0::2, 1::2, 1]
-    mosaic[1::2, 0::2] = arr[1::2, 0::2, 1]
-    mosaic[1::2, 1::2] = arr[1::2, 1::2, 2]
-    r = np.zeros((h, w), dtype=np.float32)
-    g = np.zeros((h, w), dtype=np.float32)
-    b = np.zeros((h, w), dtype=np.float32)
-    r[0::2, 0::2] = mosaic[0::2, 0::2]
-    g[0::2, 1::2] = mosaic[0::2, 1::2]
-    g[1::2, 0::2] = mosaic[1::2, 0::2]
-    b[1::2, 1::2] = mosaic[1::2, 1::2]
-
-    def fill(ch: np.ndarray) -> np.ndarray:
-        img = Image.fromarray(np.clip(ch, 0, 255).astype(np.uint8), "L")
-        return np.asarray(img.filter(ImageFilter.GaussianBlur(radius=0.85))).astype(np.float32)
-
-    r2, g2, b2 = fill(r), fill(g), fill(b)
-    r2[0::2, 0::2] = mosaic[0::2, 0::2]
-    g2[0::2, 1::2] = mosaic[0::2, 1::2]
-    g2[1::2, 0::2] = mosaic[1::2, 0::2]
-    b2[1::2, 1::2] = mosaic[1::2, 1::2]
-    return np.stack([r2, g2, b2], axis=2)
+    mosaic = np.zeros_like(arr)
+    weight = np.zeros_like(arr)
+    mosaic[0::2, 0::2, 0] = arr[0::2, 0::2, 0]
+    weight[0::2, 0::2, 0] = 1.0
+    mosaic[0::2, 1::2, 1] = arr[0::2, 1::2, 1]
+    weight[0::2, 1::2, 1] = 1.0
+    mosaic[1::2, 0::2, 1] = arr[1::2, 0::2, 1]
+    weight[1::2, 0::2, 1] = 1.0
+    mosaic[1::2, 1::2, 2] = arr[1::2, 1::2, 2]
+    weight[1::2, 1::2, 2] = 1.0
+    filled = np.empty_like(arr)
+    for c in range(3):
+        num = Image.fromarray(np.clip(mosaic[:, :, c], 0, 255).astype(np.uint8), "L")
+        den = Image.fromarray((weight[:, :, c] * 255).astype(np.uint8), "L")
+        num = np.asarray(num.filter(ImageFilter.GaussianBlur(radius=0.9))).astype(np.float32)
+        den = np.asarray(den.filter(ImageFilter.GaussianBlur(radius=0.9))).astype(np.float32) / 255.0
+        filled[:, :, c] = num / np.maximum(den, 1e-3)
+    filled = np.where(weight > 0, mosaic, filled)
+    return arr * 0.72 + filled * 0.28
 
 
 def _fft_soften(arr: np.ndarray, cutoff: float = 0.38, strength: float = 0.62) -> np.ndarray:
@@ -291,7 +288,8 @@ def _fft_soften(arr: np.ndarray, cutoff: float = 0.38, strength: float = 0.62) -
     return out
 
 
-def _mesh_warp(im: Image.Image, amp: float = 1.6) -> Image.Image:
+def _mesh_warp(im: Image.Image, amp: float = 1.2) -> Image.Image:
+    """Sub-pixel mesh. Pillow QUAD corners are NW, SW, SE, NE — not clockwise from NE."""
     w, h = im.size
     cols, rows = 8, 8
     mesh = []
@@ -302,11 +300,16 @@ def _mesh_warp(im: Image.Image, amp: float = 1.6) -> Image.Image:
             x1, y1 = int((i + 1) * cw), int((j + 1) * ch)
             dx = int(round(random.uniform(-amp, amp)))
             dy = int(round(random.uniform(-amp, amp)))
+            if x0 + dx < 0 or x1 + dx > w:
+                dx = 0
+            if y0 + dy < 0 or y1 + dy > h:
+                dy = 0
+            # NW, SW, SE, NE
             quad = (
                 x0 + dx, y0 + dy,
-                x1 + dx, y0 + dy,
-                x1 + dx, y1 + dy,
                 x0 + dx, y1 + dy,
+                x1 + dx, y1 + dy,
+                x1 + dx, y0 + dy,
             )
             mesh.append(((x0, y0, x1, y1), quad))
     return im.transform(im.size, Image.Transform.MESH, mesh, Image.Resampling.BILINEAR)
@@ -330,27 +333,23 @@ def anti_ai_pass(im: Image.Image, *, aspect: str = "none") -> Image.Image:
     work = apply_aspect(work, aspect)
     work = _deround(work)
     if min(work.size) >= 64:
-        work = _edge_crop_rescale(work, 0.018)
-        work = _squeeze(work, random.uniform(0.68, 0.78))
-        work = _mesh_warp(work, amp=1.5)
-        work = _tiny_rotate(work, 0.32)
-        work = _subpixel_shift(work, 0.9)
+        work = _edge_crop_rescale(work, 0.012)
+        work = _squeeze(work, random.uniform(0.88, 0.93))
+        work = _mesh_warp(work, amp=1.2)
+        work = _tiny_rotate(work, 0.22)
+        work = _subpixel_shift(work, 0.6)
 
     arr = np.asarray(work).astype(np.float32)
     arr = _bayer_demosaic(arr)
-    arr = _fft_soften(arr, cutoff=0.36, strength=0.58)
-    arr = _rgb_grain(arr, (2.4, 1.5, 2.7))
-    arr = _local_tone(arr, 2.8)
-    arr = _vignette(arr, 0.07)
-    # Slightly crush blacks / drop sat so it looks like a phone JPEG, not a render.
-    arr = 16.0 + (arr - 16.0) * 0.96
+    arr = _fft_soften(arr, cutoff=0.42, strength=0.28)
+    arr = _rgb_grain(arr, (1.6, 1.0, 1.8))
+    arr = _local_tone(arr, 1.8)
+    arr = _vignette(arr, 0.04)
     work = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB")
-    work = ImageEnhance.Color(work).enhance(0.94)
-    work = ImageEnhance.Contrast(work).enhance(0.97)
-    work = _chromatic_aberration(work, 0.7)
-    work = _motion_blur(work, 0.45)
+    work = _chromatic_aberration(work, 0.45)
+    work = work.filter(ImageFilter.GaussianBlur(radius=0.28))
     work = ImageEnhance.Sharpness(work).enhance(1.08)
-    work = _jpeg_roundtrip(work, random.randint(78, 84))
+    work = _jpeg_roundtrip(work, random.randint(84, 90))
 
     if alpha is not None:
         out = work.convert("RGBA")
