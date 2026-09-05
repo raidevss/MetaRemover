@@ -1,0 +1,14 @@
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.idea/
+.vscode/
+*.lnk
+Thumbs.db
+Desktop.ini
+.DS_Store
