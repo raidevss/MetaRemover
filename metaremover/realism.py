@@ -3,8 +3,8 @@
 The default "subtle" preset is the combination that changes codec/grid
 structure without an obvious look:
 
-  1% edge crop → 98.5% scale round-trip → sub-pixel shift → faint RGB
-  grain → 0.2px blur + sharpen → JPEG 93 4:2:0 at save.
+  light edge crop → mild scale round-trip → sub-pixel shift → faint RGB
+  grain → tiny blur + sharpen. JPEG is written once at save (quality 92–95).
 
 Also applies a tiny rotation, Lab round-trip, local tone, vignette, and
 per-channel CA — all below typical viewing threshold.
@@ -26,19 +26,19 @@ _AI_EDGE = {
 
 _STRENGTH = {
     "subtle": dict(
-        crop=0.01, scale=0.985, shift=0.45, rot=0.18,
-        grain=(0.75, 0.48, 0.85), blur=0.20, sharp=1.10,
-        vignette=0.04, tone=1.6, lab=0.5, ca=0.35, jpeg=None,
+        crop=0.008, scale=0.99, shift=0.35, rot=0.12,
+        grain=(0.55, 0.35, 0.62), blur=0.12, sharp=1.06,
+        vignette=0.03, tone=1.2, lab=0.35, ca=0.22,
     ),
     "strong": dict(
-        crop=0.015, scale=0.97, shift=0.80, rot=0.28,
-        grain=(1.4, 0.9, 1.6), blur=0.32, sharp=1.16,
-        vignette=0.06, tone=2.4, lab=0.9, ca=0.55, jpeg=90,
+        crop=0.012, scale=0.985, shift=0.55, rot=0.18,
+        grain=(0.95, 0.6, 1.1), blur=0.16, sharp=1.08,
+        vignette=0.04, tone=1.6, lab=0.5, ca=0.32,
     ),
     "nuclear": dict(
-        crop=0.02, scale=0.96, shift=1.15, rot=0.40,
-        grain=(2.1, 1.3, 2.3), blur=0.42, sharp=1.20,
-        vignette=0.08, tone=3.2, lab=1.2, ca=0.80, jpeg=88,
+        crop=0.015, scale=0.98, shift=0.7, rot=0.22,
+        grain=(1.25, 0.8, 1.4), blur=0.18, sharp=1.10,
+        vignette=0.05, tone=1.9, lab=0.65, ca=0.4,
     ),
 }
 
@@ -82,13 +82,13 @@ def _deround(im: Image.Image) -> Image.Image:
 
 
 def _edge_crop_rescale(im: Image.Image, frac: float) -> Image.Image:
+    """Trim edges. No upscale-back — stretching the crop is what made Nuclear look soft."""
     w, h = im.size
     cx = max(1, int(round(w * frac)))
     cy = max(1, int(round(h * frac)))
     if w - 2 * cx < 32 or h - 2 * cy < 32:
         return im
-    cropped = im.crop((cx, cy, w - cx, h - cy))
-    return cropped.resize((w, h), Image.Resampling.LANCZOS)
+    return im.crop((cx, cy, w - cx, h - cy))
 
 
 def _scale_roundtrip(im: Image.Image, scale: float) -> Image.Image:
@@ -221,8 +221,6 @@ def structure_pass(
     work = _chromatic_aberration(work, cfg["ca"])
     work = work.filter(ImageFilter.GaussianBlur(radius=cfg["blur"]))
     work = ImageEnhance.Sharpness(work).enhance(cfg["sharp"])
-    if cfg["jpeg"]:
-        work = _jpeg_roundtrip(work, cfg["jpeg"])
 
     if alpha is not None:
         out = work.convert("RGBA")
@@ -236,11 +234,11 @@ def phone_look(im: Image.Image, *, aspect: str = "none", deround: bool = True) -
 
 
 def _squeeze(im: Image.Image, frac: float) -> Image.Image:
-    """BOX down, LANCZOS up — kills VAE/upsampler checkerboards (Sightengine/Hive)."""
+    """Mild LANCZOS down/up — kills VAE/upsampler checkerboards (Sightengine/Hive)."""
     w, h = im.size
     nw = max(16, int(round(w * frac)))
     nh = max(16, int(round(h * frac)))
-    small = im.resize((nw, nh), Image.Resampling.BOX)
+    small = im.resize((nw, nh), Image.Resampling.LANCZOS)
     return small.resize((w, h), Image.Resampling.LANCZOS)
 
 
@@ -319,37 +317,59 @@ def _motion_blur(im: Image.Image, radius: float = 0.55) -> Image.Image:
     return im.filter(ImageFilter.GaussianBlur(radius=radius))
 
 
-def anti_ai_pass(im: Image.Image, *, aspect: str = "none") -> Image.Image:
+_ANTI = {
+    None: dict(
+        crop=0.01, squeeze=0.96, mesh=0.9, rot=0.14, shift=0.45,
+        fft_cut=0.46, fft=0.16, grain=(1.1, 0.7, 1.25), tone=1.3,
+        vig=0.03, ca=0.28, blur=0.14, sharp=1.06,
+    ),
+    "subtle": dict(
+        crop=0.01, squeeze=0.96, mesh=0.9, rot=0.14, shift=0.45,
+        fft_cut=0.46, fft=0.16, grain=(1.1, 0.7, 1.25), tone=1.3,
+        vig=0.03, ca=0.28, blur=0.14, sharp=1.06,
+    ),
+    "strong": dict(
+        crop=0.012, squeeze=0.95, mesh=1.05, rot=0.18, shift=0.55,
+        fft_cut=0.44, fft=0.2, grain=(1.3, 0.85, 1.45), tone=1.5,
+        vig=0.04, ca=0.34, blur=0.16, sharp=1.08,
+    ),
+    "nuclear": dict(
+        crop=0.014, squeeze=0.94, mesh=1.2, rot=0.2, shift=0.65,
+        fft_cut=0.42, fft=0.24, grain=(1.45, 0.95, 1.6), tone=1.7,
+        vig=0.045, ca=0.4, blur=0.18, sharp=1.1,
+    ),
+}
+
+
+def anti_ai_pass(im: Image.Image, *, aspect: str = "none", strength: str | None = None) -> Image.Image:
     """Camera-forensics stack aimed at pixel classifiers (Sightengine, Hive).
 
-    Sightengine docs: scoring is pixels only — EXIF/C2PA do nothing.
-    Empirical (r/StableDiffusion, Image-Detection-Bypass-Utility):
-    downscale+up, Bayer CFA, FFT smoothing, JPEG ~80, sensor grain.
+    One light structure pass. JPEG is applied once at save, not here.
     Not guaranteed. SynthID may survive.
     """
+    cfg = _ANTI.get(strength, _ANTI[None])
     had_alpha = im.mode in ("RGBA", "LA", "PA")
     alpha = im.getchannel("A") if had_alpha else None
     work = im.convert("RGB")
     work = apply_aspect(work, aspect)
     work = _deround(work)
     if min(work.size) >= 64:
-        work = _edge_crop_rescale(work, 0.012)
-        work = _squeeze(work, random.uniform(0.88, 0.93))
-        work = _mesh_warp(work, amp=1.2)
-        work = _tiny_rotate(work, 0.22)
-        work = _subpixel_shift(work, 0.6)
+        work = _edge_crop_rescale(work, cfg["crop"])
+        work = _squeeze(work, cfg["squeeze"])
+        work = _mesh_warp(work, amp=cfg["mesh"])
+        work = _tiny_rotate(work, cfg["rot"])
+        work = _subpixel_shift(work, cfg["shift"])
 
     arr = np.asarray(work).astype(np.float32)
     arr = _bayer_demosaic(arr)
-    arr = _fft_soften(arr, cutoff=0.42, strength=0.28)
-    arr = _rgb_grain(arr, (1.6, 1.0, 1.8))
-    arr = _local_tone(arr, 1.8)
-    arr = _vignette(arr, 0.04)
+    arr = _fft_soften(arr, cutoff=cfg["fft_cut"], strength=cfg["fft"])
+    arr = _rgb_grain(arr, cfg["grain"])
+    arr = _local_tone(arr, cfg["tone"])
+    arr = _vignette(arr, cfg["vig"])
     work = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB")
-    work = _chromatic_aberration(work, 0.45)
-    work = work.filter(ImageFilter.GaussianBlur(radius=0.28))
-    work = ImageEnhance.Sharpness(work).enhance(1.08)
-    work = _jpeg_roundtrip(work, random.randint(84, 90))
+    work = _chromatic_aberration(work, cfg["ca"])
+    work = work.filter(ImageFilter.GaussianBlur(radius=cfg["blur"]))
+    work = ImageEnhance.Sharpness(work).enhance(cfg["sharp"])
 
     if alpha is not None:
         out = work.convert("RGBA")

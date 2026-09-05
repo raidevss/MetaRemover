@@ -20,8 +20,8 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp", ".avif"
 
 _TIP_CAMERA = "Writes this phone's Make, Model, lens, and date on a JPEG. Social apps still strip EXIF after they read C2PA."
 _TIP_GPS = "Optional fake location in EXIF. Search or click the map. Most apps strip GPS on upload."
-_TIP_PIXEL = "Light crop, grain, and JPEG so the file is not a perfect AI PNG. Does not remove SynthID."
-_TIP_ANTIAI = "Camera pipeline for pixel classifiers (Sightengine, Hive). EXIF does nothing there. Not guaranteed."
+_TIP_PIXEL = "Light crop and grain, then one JPEG save. Nuclear is stronger grain, not a second compress. Does not remove SynthID."
+_TIP_ANTIAI = "Camera-pipeline pass for pixel classifiers. Uses the Pixel strength. JPEG is saved once. Not guaranteed."
 _TIP_ASPECT = "Optional center crop to a phone or social ratio. Original keeps the frame."
 _TIP_OUTPUT = "Where cleaned files go. Default is the same folder as name_clean.jpg."
 _TIP_LIST = "Click one. Ctrl+click to add more. Only the selection is processed."
@@ -377,7 +377,9 @@ class MainWindow(QMainWindow):
         preset_key = self.preset_combo.currentData()
         pixel = self.pixel_combo.currentData()
         anti = self.anti_ai_check.isChecked()
-        quality = 82 if anti else {None: 95, "subtle": 93, "strong": 90, "nuclear": 90}.get(pixel, 93)
+        quality = {None: 95, "subtle": 94, "strong": 93, "nuclear": 92}.get(pixel, 94)
+        if anti:
+            quality = min(quality, 93)
         options = {
             "preset": preset_key,
             "gps_lat": self.lat_spin.value() if (preset_key and self.gps_check.isChecked()) else None,
@@ -385,7 +387,7 @@ class MainWindow(QMainWindow):
             "quality": quality,
             "force_jpeg": bool(preset_key or pixel or anti),
             "aspect": self.aspect_combo.currentData() or "none",
-            "pixel_strength": None if anti else pixel,
+            "pixel_strength": pixel,
             "anti_ai": anti,
         }
 

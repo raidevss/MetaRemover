@@ -366,9 +366,8 @@ def strip_and_save(
         force_jpeg = True
 
     if anti_ai:
-        clean = realism.anti_ai_pass(clean, aspect=aspect)
+        clean = realism.anti_ai_pass(clean, aspect=aspect, strength=pixel_strength)
         force_jpeg = True
-        jpeg_quality = min(jpeg_quality, 82)
     elif pixel_strength:
         clean = realism.structure_pass(clean, strength=pixel_strength, aspect=aspect)
     elif aspect and aspect != "none":
