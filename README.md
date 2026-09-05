@@ -1,57 +1,105 @@
 # MetaRemover
 
-Windows desktop app that **rebuilds a photo from its pixels**, drops every metadata and provenance layer that lived in the file headers, then optionally writes a phone-camera JPEG so Windows Details, Discord, and similar surfaces show Make / Model / Date instead of “no metadata”.
+Windows desktop app that **strips every metadata / provenance layer** from a photo, then optionally writes a phone-camera EXIF trail so Windows Details, Discord, and similar surfaces show Make / Model / Date.
 
-Drag images in, inspect before/after, pick a camera, optionally drop a GPS pin, process. Default camera is iPhone 17.
+**v1.1.0 default is quality-first:** Pixel pass Off, one JPEG at quality 98 / 4:4:4 if a camera profile is selected. Grain, crop, and Anti-AI are opt-in.
 
-## Why a pixel rebuild
+## Recommended settings (realistic upload, no extra softness)
 
-Most “EXIF strippers” rewrite tags in place. That leaves C2PA Content Credentials (JPEG APP11 / PNG `caBX`), IPTC `DigitalSourceType`, PNG ComfyUI workflows, ICC profiles, and vendor chunks sitting in the container.
+| Control | Set to | Why |
+| --- | --- | --- |
+| Camera | iPhone 17 (default) | Make, Model, lens, DateTimeOriginal, APEX exposure, thumbnail |
+| GPS | Optional | Fake location in EXIF. Most social apps strip it on upload |
+| Pixel pass | **Off** | Leaves pixels alone. This is what keeps sharpness |
+| Anti-AI | **Off** | Classifier pass *is* a resample. It will look softer |
+| Aspect | Original | Crops change framing |
 
-MetaRemover copies pixel values into a new image and saves that file. Source headers are never copied.
+Camera None + Pixel Off keeps PNG/WebP/TIFF as the same format (true lossless strip).
+
+A phone preset always saves **JPEG** — real iPhones never write camera EXIF on PNG.
 
 ## What it removes vs what it cannot
 
 | Layer | Where it lives | This tool |
 | --- | --- | --- |
 | C2PA Content Credentials | JPEG APP11 / PNG `caBX` / AVIF uuid / XMP | Removed |
-| IPTC `DigitalSourceType` (trainedAlgorithmicMedia) | XMP / IPTC | Removed |
+| IPTC `DigitalSourceType` (`trainedAlgorithmicMedia`) | XMP / IPTC | Removed |
 | EXIF / GPS / IPTC / XMP | File headers | Removed; optional phone EXIF written back |
 | PNG prompts / ComfyUI workflow | `tEXt` / `iTXt` | Removed |
 | xAI / Grok JPEG signature | EXIF Artist UUID + `Signature:` blob | Removed |
 | China AIGC (TC260) / Samsung genAIType | PNG iTXt / maker notes | Removed |
 | JPEG JFIF + Adobe APP14 | Software-export markers | Dropped on camera JPEGs |
-| JPEG quantization-table fingerprint | Codec tables | Wiped on re-encode |
-| LSB / naive stego | Low bits | Destroyed by resample |
-| **Google SynthID** / OpenAI pixel watermark | Frequency-domain **pixels** | **Not guaranteed.** Built to survive crop, JPEG, noise, screenshots. |
+| **Google SynthID** / OpenAI pixel watermark | **Pixels** | **Not removed.** No metadata tool can |
 
-OpenAI (since May 2026) and Google embed SynthID in the pixels as well as C2PA. Metadata tools cannot clear that. OpenAI Verify and the Gemini app can still match those files.
+Instagram, Facebook, Threads, TikTok, and LinkedIn **read C2PA/IPTC at upload** and apply an “AI info” label, **then** strip the metadata from the served file. A naive EXIF-only rewrite that leaves C2PA still gets labeled.
 
-Instagram, Facebook, Threads, TikTok, and LinkedIn **read C2PA/IPTC at upload** and apply an “AI info” label, **then** strip the metadata from the served file. A naive EXIF-only strip still gets labeled.
+Grok web-UI downloads are often WebP with no tags. The original JPEG (`imagine-public.x.ai`) carries an xAI EXIF signature, not C2PA.
 
-Grok web-UI downloads are often WebP with no tags. The original JPEG (download button / `imagine-public.x.ai`) carries an xAI EXIF signature, not C2PA.
+## Research notes (Sept 2026)
 
-Sources: [ExifReader 2026](https://www.exifreader.com/blog/remove-ai-metadata-from-images/), [C2PA vs watermarking](https://metastrip.app/blog/content-credentials-vs-watermarking-vs-metadata), [OpenAI provenance (May 2026)](https://openai.com/index/advancing-content-provenance/), [Instagram AI labels](https://www.theverge.com/ai-artificial-intelligence/989617/instagram-ai-content-label-confusion).
+### SynthID
+
+Google SynthID (and OpenAI’s use of the same family) is a **post-hoc pixel watermark**, not a file tag. [ExifReader’s 2026 guide](https://www.exifreader.com/blog/remove-ai-metadata-from-images/) and [MetaStrip](https://metastrip.app/blog/remove-c2pa-content-credentials-from-image) state the same boundary: strip C2PA/EXIF all day; SynthID is still there. [The Verge](https://www.theverge.com/tech/980416/google-gemini-ai-watermarks-removal) (Aug 2026): turning off Gemini’s visible sparkle does **not** turn off SynthID or C2PA.
+
+Independent engineering ([remove-ai-watermarks](https://github.com/wiltodelta/remove-ai-watermarks/blob/main/docs/synthid.md)):
+
+- Google’s paper (arXiv:2510.09263): SynthID-O keeps ~99.99% detection after JPEG, crop, and resize.
+- A quality-preserving **local** remover that still fools Gemini / OpenAI Verify was **not found**.
+- Diffusion img2img that *sometimes* clears the vendor oracle needs strength ~0.05 (OpenAI) to ~0.15 (Google) and lands around **25–36 dB PSNR** — that is visible damage.
+- Attacks that beat the watermark verifier are often still caught as “went through a remover” ([Goonatilake & Ateniese 2026](https://arxiv.org/abs/2605.09203)).
+
+MetaRemover will not ship a fake “remove SynthID” button.
+
+### Best metadata removers (what actually matters)
+
+Good tools edit **containers only**. Bad tools re-encode pixels.
+
+| Tool | C2PA | EXIF/IPTC/XMP | Pixels | Notes |
+| --- | --- | --- | --- | --- |
+| **MetaRemover** (this) | Yes (rebuild) | Yes + optional camera write-back | Untouched when Pixel Off | Desktop, offline, Windows |
+| [ExifReader AI Remover](https://www.exifreader.com/blog/remove-ai-metadata-from-images/) | Yes | AI-only or all | Untouched | Honest about SynthID |
+| [MetaStrip](https://metastrip.app/blog/remove-c2pa-content-credentials-from-image) | Yes | Yes | Untouched | Browser, no upload |
+| ExifTool ` -all=` | Partial/manual | Yes | Untouched | Can drop ICC and shift color |
+| ExifCleaner | Often EXIF-only | GPS/EXIF | Untouched | Verify C2PA still gone |
+| “SynthID remover” websites | Marketing | Varies | Often re-encode | Treat as unverified |
+
+For **Instagram AI Info**, the reliable pre-upload fix is **C2PA + IPTC DigitalSourceType gone**. Meta has said the label is driven by those technical standards, not a public pixel scan at upload.
+
+### Metadata a realistic phone upload should have
+
+Windows Details / Discord look “empty” on a headerless PNG. A camera JPEG should carry:
+
+- `Make` / `Model` (e.g. Apple / iPhone 17)
+- `Software` = iOS version only (`26.6.1`), not “Photoshop”
+- `DateTime` / `DateTimeOriginal` / `OffsetTime*`
+- `FNumber`, `ExposureTime`, `ISOSpeedRatings`, `FocalLength`, `FocalLengthIn35mmFilm`
+- `LensMake` / `LensModel`
+- Optional `GPS*` (lat/lon/alt/timestamp)
+- Embedded JPEG thumbnail
+- APP1 EXIF **first**, no JFIF APP0, no Adobe APP14
+
+That is what the Camera profiles write. GPS is optional because most social apps strip it after they read C2PA.
+
+### Anti-AI classifiers (Hive, Sightengine)
+
+Those score **pixels**, not EXIF. Light JPEG at phone quality (85–90) is the usual advice; heavy noise/blur is what makes a file look processed. MetaRemover’s Anti-AI pass is opt-in, not default, and is **not guaranteed**. Hive/Sightengine still do well on lightly edited fakes in 2026 tests.
 
 ## Features
 
-- **Before / after reader** — EXIF (Pillow `getexif` + piexif), GPS, IPTC, ICC, XMP, PNG text, WEBP chunks, AVIF boxes, C2PA / `caBX` / JUMBF, Grok signature, AIGC labels.
-- **Clean strip** — rebuild from raw pixels. Source headers and chunks are not copied.
-- **Camera JPEG write** — APP1 EXIF first, no JFIF / APP14. Windows Details shows Make / Model / Date taken. Thumbnail and APEX exposure tags included.
-- **Device profiles** — iPhone 13–18 (and Pro / Pro Max), Galaxy S24 / S25, Pixel 8 / 9 / 10. A phone preset always saves **JPEG**. Default is iPhone 17 on iOS 26.
-- **GPS map picker** — offline world map (Natural Earth land). Search uses Nominatim; no OSM tiles.
-- **Pixel pass** (Subtle default) — 1% crop, 98.5% scale round-trip, sub-pixel shift, 0.1–0.3° rotation, per-channel grain, 0.2px blur + sharpen, Lab / tone / vignette / CA, JPEG 93 4:2:0. Does not remove SynthID.
-- **Anti-AI pass** — stronger camera-pipeline stack aimed at pixel classifiers (Sightengine, Hive). EXIF does nothing there. Not guaranteed.
-- **Aspect crop** — original, 4:3 phone, 4:5 Instagram, 9:16 story, 16:9.
-- **Dark / light theme**, drag-and-drop, multi-select process.
-
-Hover help lives on the field **names** (Camera, GPS, Pixel pass), not on the pickers.
+- **Before / after reader** — EXIF, GPS, IPTC, ICC, XMP, PNG text, WEBP chunks, AVIF boxes, C2PA / JUMBF, Grok signature, AIGC labels.
+- **Lossless strip** (default) — copy pixels, drop every source header/chunk.
+- **Camera JPEG write** — APP1 EXIF first, no JFIF / APP14. Quality 98, 4:4:4 when Pixel is Off.
+- **Device profiles** — iPhone 13–18 (and Pro / Pro Max), Galaxy S24 / S25, Pixel 8 / 9 / 10. Default iPhone 17 / iOS 26.
+- **GPS map picker** — offline Natural Earth land. Search uses Nominatim.
+- **Pixel pass** — opt-in Subtle / Strong / Nuclear grain + light resample. Not SynthID.
+- **Anti-AI pass** — opt-in classifier-oriented stack. Softens. Not guaranteed.
+- Dark / light theme, drag-and-drop, multi-select.
 
 ## Requirements
 
 - Windows
 - Python 3.10 or newer
-- Dependencies in `requirements.txt`: PySide6, Pillow, piexif, numpy
+- `requirements.txt`: PySide6, Pillow, piexif, numpy
 
 ## Install
 
@@ -64,9 +112,7 @@ venv\Scripts\pip install -r requirements.txt
 
 ## Run
 
-Double-click **`MetaRemover.vbs`** (no console window) or **`MetaRemover.bat`**. A Desktop shortcut is created the first time you run the launcher.
-
-Or from a terminal:
+Double-click **`MetaRemover.vbs`** (no console) or **`MetaRemover.bat`**. A Desktop shortcut is created the first time.
 
 ```powershell
 venv\Scripts\python.exe main.py
@@ -74,26 +120,12 @@ venv\Scripts\python.exe main.py
 
 ## Usage
 
-1. **Add** images, or drag files / a folder onto the list. Thumbnails stay in the list; click one to read its metadata.
-2. **Camera** — pick a phone profile (default iPhone 17) or None for a headerless strip.
-3. **GPS** — optional. Search or click the map. Most apps strip GPS on upload.
-4. **Pixel pass** — Subtle is the default. Off leaves pixels untouched besides the rebuild.
-5. **Anti-AI** — optional, heavier pixel pipeline. Overrides the pixel-pass strength.
-6. **Aspect** — optional center crop.
-7. **Output** — same folder as `name_clean.jpg` by default, or choose a folder.
-8. Select one or more files (**Ctrl+click** to add) and **Process**.
-
-Only the current selection is processed.
-
-## How a camera JPEG is written
-
-When a phone preset is selected, the output is always JPEG:
-
-1. Pixels are copied into a new image (and optionally run through the pixel / anti-AI pass).
-2. EXIF is built to match a real Camera dump: Make, Model, Software (iOS version only on iPhones), lens, APEX exposure, thumbnail.
-3. The JPEG is written with APP1 EXIF first and no JFIF / Adobe APP14 software tells.
-
-PNG has no camera EXIF on a real iPhone. Saving PNG with a phone profile would leave Windows Details empty, so the tool forces JPEG.
+1. Add images, or drag files / a folder. Click one to read metadata.
+2. Camera — iPhone 17 by default, or None for a headerless strip.
+3. GPS — optional.
+4. Pixel pass — **leave Off** unless you want grain.
+5. Anti-AI — leave Off unless you accept softness.
+6. Process the selection (Ctrl+click to add).
 
 ## Device profiles
 
@@ -111,36 +143,11 @@ PNG has no camera EXIF on a real iPhone. Saving PNG with a phone profile would l
 
 ## Supported formats
 
-Static rasters only: JPEG, PNG, WEBP, TIFF, BMP, AVIF.
-
-## Project layout
-
-```
-MetaRemover/
-├── main.py                 # Qt entry
-├── MetaRemover.vbs         # silent launcher + desktop shortcut
-├── MetaRemover.bat
-├── requirements.txt
-└── metaremover/
-    ├── gui.py              # desktop UI
-    ├── metadata.py         # read + pixel-rebuild strip
-    ├── scan.py             # raw container scan (C2PA, PNG text, …)
-    ├── presets.py          # fake-EXIF device profiles
-    ├── realism.py          # pixel pass + anti-AI pass
-    ├── geo_picker.py       # offline GPS map
-    ├── theme.py
-    └── data/land-110m.json # Natural Earth land (map)
-```
-
-## Notes
-
-- Nuclear / anti-AI modes slightly change pixels. That is the point.
-- If a platform still flags the image after a clean strip, it is reading pixels (SynthID / a classifier), not metadata.
-- GPS is optional fake location in EXIF. It does not change the picture.
+JPEG, PNG, WEBP, TIFF, BMP, AVIF.
 
 ## Disclaimer
 
-This tool is for inspecting and cleaning metadata on files you own or are allowed to process. Writing a phone-camera EXIF trail does not make an image “not AI,” does not defeat SynthID, and is not a guarantee against platform labels or forensic classifiers. Use it accordingly.
+For files you own or are allowed to process. Camera EXIF does not make an image “not AI,” does not defeat SynthID, and is not a guarantee against platform labels or forensic classifiers.
 
 ## License
 

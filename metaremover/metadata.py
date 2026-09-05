@@ -299,7 +299,13 @@ def _jpeg_camera_container(data: bytes) -> bytes:
     return bytes(out)
 
 
-def _write_jpeg_with_exif(path: str, image: Image.Image, exif_bytes: bytes | None, quality: int) -> None:
+def _write_jpeg_with_exif(
+    path: str,
+    image: Image.Image,
+    exif_bytes: bytes | None,
+    quality: int,
+    subsampling: str = "4:4:4",
+) -> None:
     if image.mode not in ("RGB", "L"):
         image = image.convert("RGB")
     save_kwargs = {
@@ -307,7 +313,7 @@ def _write_jpeg_with_exif(path: str, image: Image.Image, exif_bytes: bytes | Non
         "quality": quality,
         "optimize": False,
         "progressive": False,
-        "subsampling": "4:2:0",
+        "subsampling": subsampling,
     }
     buf = io.BytesIO()
     image.save(buf, **save_kwargs)
@@ -335,7 +341,8 @@ def strip_and_save(
     gps_lon: float | None = None,
     disrupt_watermarks: bool = False,
     watermark_strength: str = "medium",
-    jpeg_quality: int = 93,
+    jpeg_quality: int = 98,
+    jpeg_subsampling: str = "4:4:4",
     photo_realism: bool = False,
     force_jpeg: bool = False,
     social_look: bool = False,
@@ -343,15 +350,13 @@ def strip_and_save(
     pixel_strength: str | None = None,
     anti_ai: bool = False,
 ) -> str:
-    """Rebuild from raw pixels and save. Returns the actual output path."""
+    """Copy pixels into a new image (headers never copied) and save."""
     from . import presets as pr
     from . import realism
 
     with Image.open(src_path) as src:
         src.load()
-        mode = src.mode
-        clean = Image.new(mode, src.size)
-        clean.putdata(list(src.getdata()))
+        clean = Image.frombytes(src.mode, src.size, src.tobytes())
 
     if pixel_strength is None:
         if social_look or photo_realism:
@@ -390,7 +395,9 @@ def strip_and_save(
 
     ext = os.path.splitext(dst_path)[1].lower()
     if ext in (".jpg", ".jpeg"):
-        _write_jpeg_with_exif(dst_path, clean, fake_exif_bytes, jpeg_quality)
+        _write_jpeg_with_exif(
+            dst_path, clean, fake_exif_bytes, jpeg_quality, jpeg_subsampling,
+        )
         return dst_path
 
     save_kwargs: dict = {}

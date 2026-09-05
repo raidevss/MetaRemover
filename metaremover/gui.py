@@ -20,10 +20,10 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp", ".avif"
 
 _TIP_CAMERA = "Writes this phone's Make, Model, lens, and date on a JPEG. Social apps still strip EXIF after they read C2PA."
 _TIP_GPS = "Optional fake location in EXIF. Search or click the map. Most apps strip GPS on upload."
-_TIP_PIXEL = "Light crop and grain, then one JPEG save. Nuclear is stronger grain, not a second compress. Does not remove SynthID."
-_TIP_ANTIAI = "Camera-pipeline pass for pixel classifiers. Uses the Pixel strength. JPEG is saved once. Not guaranteed."
+_TIP_PIXEL = "Off keeps original sharpness (recommended). Subtle/Nuclear add grain on purpose. Does not remove SynthID."
+_TIP_ANTIAI = "Optional extra pixel pass for classifiers (Hive/Sightengine). Softens the image. Not SynthID. Not guaranteed."
 _TIP_ASPECT = "Optional center crop to a phone or social ratio. Original keeps the frame."
-_TIP_OUTPUT = "Where cleaned files go. Default is the same folder as name_clean.jpg."
+_TIP_OUTPUT = "Pixel Off + Camera writes one q98 4:4:4 JPEG. Pixel Off + Camera None keeps the original format."
 _TIP_LIST = "Click one. Ctrl+click to add more. Only the selection is processed."
 
 
@@ -107,6 +107,7 @@ class ProcessWorker(QThread):
                     gps_lat=self.options.get("gps_lat"),
                     gps_lon=self.options.get("gps_lon"),
                     jpeg_quality=self.options["quality"],
+                    jpeg_subsampling=self.options.get("jpeg_subsampling", "4:4:4"),
                     force_jpeg=self.options.get("force_jpeg", False),
                     aspect=self.options.get("aspect", "none"),
                     pixel_strength=self.options.get("pixel_strength"),
@@ -228,7 +229,7 @@ class MainWindow(QMainWindow):
         self.pixel_combo.addItem("Subtle", "subtle")
         self.pixel_combo.addItem("Strong", "strong")
         self.pixel_combo.addItem("Nuclear", "nuclear")
-        self.pixel_combo.setCurrentIndex(1)
+        self.pixel_combo.setCurrentIndex(0)
         right.addWidget(self.pixel_combo)
 
         right.addWidget(_label("Anti-AI", _TIP_ANTIAI))
@@ -377,7 +378,8 @@ class MainWindow(QMainWindow):
         preset_key = self.preset_combo.currentData()
         pixel = self.pixel_combo.currentData()
         anti = self.anti_ai_check.isChecked()
-        quality = {None: 95, "subtle": 94, "strong": 93, "nuclear": 92}.get(pixel, 94)
+        pixel_on = bool(pixel) or anti
+        quality = {None: 98, "subtle": 95, "strong": 93, "nuclear": 92}.get(pixel, 98)
         if anti:
             quality = min(quality, 93)
         options = {
@@ -385,6 +387,7 @@ class MainWindow(QMainWindow):
             "gps_lat": self.lat_spin.value() if (preset_key and self.gps_check.isChecked()) else None,
             "gps_lon": self.lon_spin.value() if (preset_key and self.gps_check.isChecked()) else None,
             "quality": quality,
+            "jpeg_subsampling": "4:2:0" if pixel_on else "4:4:4",
             "force_jpeg": bool(preset_key or pixel or anti),
             "aspect": self.aspect_combo.currentData() or "none",
             "pixel_strength": pixel,
